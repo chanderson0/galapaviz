@@ -1,0 +1,9 @@
+ofxAppUtils
+ofxAudioAnalyzer
+ofxDatGui
+ofxFft
+ofxGui
+ofxJSON
+ofxMidi
+ofxPostProcessing
+ofxXmlSettings
