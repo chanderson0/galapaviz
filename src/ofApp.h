@@ -2,7 +2,6 @@
 
 #include "ofMain.h"
 #include "ofxGui.h"
-#include "ofxFft.h"
 #include "ofxAudioAnalyzer.h"
 #include "MidiController.h"
 
@@ -24,16 +23,20 @@ public:
     void windowResized(int w, int h);
     void dragEvent(ofDragInfo dragInfo);
     void gotMessage(ofMessage msg);
+    void exit();
+    
+    bool gradientExists(int idx);
+    ofTexture loadGradient(int id);
 
-    void audioReceived(float* input, int bufferSize, int nChannels);
+    void audioIn(ofSoundBuffer &inBuffer);
 
+    void setupGradients();
     bool shaderExists(int idx);
     void reloadShaders();
 
     ofSoundStream soundStream;
     int selectedAudioSource;
 
-    ofxFft* fft;
     ofxAudioAnalyzer audioAnalyzer;
     ofTexture audioTex;
     ofFbo audioTexFbo;
@@ -54,6 +57,11 @@ public:
     int currShaderIdx, prevShaderIdx;
     ofShader currShader, prevShader;
     ofFbo currScene, prevScene;
+    
+    bool transitionGradients;
+    int currGradientIdx, prevGradientIdx;
+    float currGradientAmt;
+    vector<ofTexture> gradients;
 
     bool transitioning;
     float transitionAmt;

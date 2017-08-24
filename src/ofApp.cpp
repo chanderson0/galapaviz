@@ -16,8 +16,8 @@ void ofApp::setup(){
     ofSetFrameRate(120);
     ofSetVerticalSync(true);
 
-    audioAnalyzer.setup(bufferSize, sampleRate);
-    audioAnalyzer.setOnsetAlpha(3.0);
+    audioAnalyzer.setup(sampleRate, bufferSize, 1);
+    audioAnalyzer.setOnsetsParameters(0, 0.1, 0.02, 100.0);
 
     const int width = ofGetWidth();
     const int height = ofGetHeight();
@@ -32,8 +32,8 @@ void ofApp::setup(){
     fftSmoothOut = new float[bins];
     memset(fftSmoothOut, 0, sizeof(float) * bins);
 
-    currShaderIdx = 3;
-    prevShaderIdx = 2;
+    currShaderIdx = 5;
+    prevShaderIdx = 4;
 
     drawDebug = false;
     rmsSmoothed = 0;
@@ -51,10 +51,15 @@ void ofApp::setup(){
     audioTex.allocate(bins, kAudioLines, GL_R16F, GL_RED, GL_FLOAT);
     audioTexFbo.allocate(bins, kAudioLines, GL_R16F);
     audioTexPixels.allocate(bins, kAudioLines, 1);
+    
+    currGradientIdx = 0;
+    prevGradientIdx = 0;
+    currGradientAmt = 1.0;
+    setupGradients();
 
     gui.setup();
 
-    audioSource.set("audioSource", 3, 0, soundStream.getDeviceList().size());
+    audioSource.set("audioSource", 0, 0, soundStream.getDeviceList().size());
     gui.add(audioSource);
 
     fixedParams.setName("Fixed Params");
@@ -107,6 +112,32 @@ void ofApp::setup(){
     soundStream.setup(this, 0, 1, sampleRate, bufferSize, 4);
 }
 
+void ofApp::setupGradients() {
+    gradients.clear();
+
+    int i = 1;
+    while(gradientExists(i)) {
+        ofTexture t = loadGradient(i);
+        gradients.push_back(move(t));
+        i++;
+    }
+}
+
+bool ofApp::gradientExists(int idx) {
+    char buf[50];
+    sprintf(buf, "gradients/%02d.png", idx);
+    ofFile f(buf);
+    return f.exists();
+}
+
+ofTexture ofApp::loadGradient(int idx) {
+    char buf[50];
+    sprintf(buf, "gradients/%02d.png", idx);
+    ofFile f(buf);
+    ofImage img(f);
+    return img.getTexture();
+}
+
 //--------------------------------------------------------------
 void ofApp::update(){
     long now = ofGetElapsedTimeMillis();
@@ -115,6 +146,14 @@ void ofApp::update(){
     if (ofGetFrameNum() % 30 == 15) {
         if (!midiController.midiIn.isOpen()) {
             midiController.setup();
+        }
+    }
+    
+    if (transitionGradients) {
+        currGradientAmt += 0.01;
+        if (currGradientAmt > 0.99) {
+            currGradientAmt = 1.0;
+            transitionGradients = false;
         }
     }
 
@@ -148,14 +187,15 @@ void ofApp::update(){
         selectedAudioSource = audioSource;
     }
 
-    memcpy(fftOut, audioAnalyzer.getSpectrum(), sizeof(float) * bufferSize / 2);
+    vector<float> spectrum = audioAnalyzer.getValues(SPECTRUM, 0, 0.0);
+    memcpy(fftOut, spectrum.data(), sizeof(float) * bufferSize / 2);
 
     if (ofGetFrameNum() % 30 == 0) {
         reloadShaders();
     }
 
     for (int i = 0; i < bins; ++i) {
-        float h = ofMap(fftOut[i], log10(0.001), log10(1.0), 0.0, 1.0, true);
+        float h = ofMap(fftOut[i], -6.0, 0.0, 0.0, 1.0, true);
         float val = h; //ofClamp(16.0 * log10(fftOut[i] + 1), 0.0, 1.0);
 
         if (val > fftSmoothOut[i]) {
@@ -165,7 +205,7 @@ void ofApp::update(){
         }
     }
 
-    float newRms = audioAnalyzer.getRms();
+    float newRms = audioAnalyzer.getValue(RMS, 0, 0.0);
     rmsDiff = newRms - rmsDiff;
     rmsDiffCumul += rmsDiff;
     rms = newRms;
@@ -181,8 +221,8 @@ void ofApp::draw(){
     float resolution[] = {(float)ofGetWidth(), (float)ofGetHeight()};
     float time = ofGetElapsedTimef();
 
-    ofEnableAlphaBlending();
-
+    ofDisableAlphaBlending();
+    
     audioTexFbo.begin();
     audioTex.draw(0, 1);
     audioTexFbo.end();
@@ -194,6 +234,8 @@ void ofApp::draw(){
     }
     audioTex.loadData(audioTexPixels);
 
+    ofEnableAlphaBlending();
+    
     currScene.begin();
         currShader.begin();
             currShader.setUniform1f("time", time);
@@ -204,6 +246,11 @@ void ofApp::draw(){
             currShader.setUniform2fv("resolution", resolution);
             currShader.setUniformTexture("audioTex", audioTex, 1);
             currShader.setUniform2f("audioTexSize", audioTex.getWidth(), audioTex.getHeight());
+            currShader.setUniformTexture("currGradient", gradients[currGradientIdx], 2);
+            currShader.setUniform2f("currGradientSize", gradients[currGradientIdx].getWidth(), gradients[currGradientIdx].getHeight());
+            currShader.setUniformTexture("prevGradient", gradients[prevGradientIdx], 3);
+            currShader.setUniform2f("prevGradientSize", gradients[prevGradientIdx].getWidth(), gradients[prevGradientIdx].getHeight());
+            currShader.setUniform1f("currGradientAmt", currGradientAmt);
 
             // TODO: precompute string names
             for (int i = 0; i < kNumExtraParams; ++i) {
@@ -233,8 +280,8 @@ void ofApp::draw(){
     }
 }
 
-void ofApp::audioReceived(float* input, int bufferSize, int nChannels) {
-    audioAnalyzer.analyze(input, bufferSize);
+void ofApp::audioIn(ofSoundBuffer &inBuffer) {
+    audioAnalyzer.analyze(inBuffer);
 }
 
 void ofApp::reloadShaders() {
@@ -281,6 +328,36 @@ void ofApp::keyPressed(int key){
             cout << "Regressing curr:" << currShaderIdx << " prev:" << prevShaderIdx << endl;
             reloadShaders();
         }
+    } else if (key == OF_KEY_UP) {
+        if (!transitionGradients) {
+            transitionGradients = true;
+            setupGradients();
+
+            prevGradientIdx = currGradientIdx;
+            currGradientIdx = (currGradientIdx + 1) % gradients.size();
+            currGradientAmt = 0.0;
+            
+            cout << "Advancing gradient curr:" << currGradientIdx << " prev:" << prevGradientIdx << endl;
+        } else {
+            currGradientAmt = 1.0;
+            transitionGradients = false;
+        }
+    } else if (key == OF_KEY_DOWN) {
+        if (!transitionGradients) {
+            transitionGradients = true;
+            setupGradients();
+
+            prevGradientIdx = currGradientIdx;
+            currGradientIdx--;
+            if (currGradientIdx < 0) {
+                currGradientIdx = gradients.size() - 1;
+            }
+            
+            cout << "Regressing gradient curr:" << currGradientIdx << " prev:" << prevGradientIdx << endl;
+        } else {
+            currGradientAmt = 1.0;
+            transitionGradients = false;
+        }
     } else if (key == 'd') {
         drawDebug = !drawDebug;
     }
@@ -325,6 +402,12 @@ void ofApp::mouseExited(int x, int y){
 void ofApp::windowResized(int w, int h){
     currScene.allocate(ofGetWidth(), ofGetHeight(), GL_RGBA);
     prevScene.allocate(ofGetWidth(), ofGetHeight(), GL_RGBA);
+}
+
+//--------------------------------------------------------------
+void ofApp::exit(){
+    audioAnalyzer.exit();
+    ofSoundStreamStop();
 }
 
 //--------------------------------------------------------------
